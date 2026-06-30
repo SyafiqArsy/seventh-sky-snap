@@ -42,6 +42,7 @@ class GestureRecognizer:
         self._pinch_distance = 0.0
         self._pinch_distance_history = deque(maxlen=config.GESTURE_SMOOTHING)
         self.index_finger_tip = None  # (x, y) normalized
+        self._hand_detected_frames = 0
 
     def update(self, landmarks):
         """Analyze landmarks and determine the current gesture.
@@ -56,19 +57,31 @@ class GestureRecognizer:
             self.current_gesture = config.GESTURE_NONE
             self.gesture_history.append(config.GESTURE_NONE)
             self.index_finger_tip = None
+            self._hand_detected_frames = 0
+            return config.GESTURE_NONE
+
+        self._hand_detected_frames += 1
+
+        # Skip gesture recognition for first few frames to avoid false triggers
+        if self._hand_detected_frames < 8:
+            self.current_gesture = config.GESTURE_NONE
+            self.gesture_history.append(config.GESTURE_NONE)
+            index_tip = landmarks[self.INDEX_TIP]
+            self.index_finger_tip = (index_tip[0], index_tip[1])
             return config.GESTURE_NONE
 
         # Extract key points
         thumb_tip = landmarks[self.THUMB_TIP]
-        index_tip = landmarks[self.INDEX_TIP]
-        middle_tip = landmarks[self.MIDDLE_TIP]
-        ring_tip = landmarks[self.RING_TIP]
-        pinky_tip = landmarks[self.PINKY_TIP]
-
+        thumb_ip = landmarks[self.THUMB_IP]
         thumb_mcp = landmarks[self.THUMB_MCP]
+        index_tip = landmarks[self.INDEX_TIP]
+        index_pip = landmarks[self.INDEX_PIP]
         index_mcp = landmarks[self.INDEX_MCP]
+        middle_tip = landmarks[self.MIDDLE_TIP]
         middle_pip = landmarks[self.MIDDLE_PIP]
+        ring_tip = landmarks[self.RING_TIP]
         ring_pip = landmarks[self.RING_PIP]
+        pinky_tip = landmarks[self.PINKY_TIP]
         pinky_pip = landmarks[self.PINKY_PIP]
         wrist = landmarks[self.WRIST]
 
@@ -80,34 +93,80 @@ class GestureRecognizer:
         self._pinch_distance_history.append(self._pinch_distance)
         avg_pinch = sum(self._pinch_distance_history) / len(self._pinch_distance_history)
 
-        # Determine finger states (extended or curled)
-        fingers = self._check_fingers_extended(landmarks)
+        # Determine finger states using strict y-position check
+        # In normalized coords, y=0 is top, y=1 is bottom
+        # A finger is extended if its TIP is ABOVE (less y) its PIP joint
+        fingers = {
+            "index": index_tip[1] < index_pip[1] - 0.02,
+            "middle": middle_tip[1] < middle_pip[1] - 0.02,
+            "ring": ring_tip[1] < ring_pip[1] - 0.02,
+            "pinky": pinky_tip[1] < pinky_pip[1] - 0.02,
+        }
+
+        # Thumb: check if tip is away from palm center horizontally
+        palm_center_x = (index_mcp[0] + wrist[0]) / 2
+        thumb_extended = abs(thumb_tip[0] - palm_center_x) > 0.06
 
         # Gesture Classification
         gesture = config.GESTURE_NONE
 
-        # Check thumbs up: thumb extended up, all other fingers curled
-        if self._is_thumbs_up(landmarks, fingers):
+        # Check thumbs up FIRST (most specific):
+        # - thumb tip clearly above thumb MCP (y decreases going up)
+        # - thumb tip above wrist
+        # - ALL other fingers clearly curled (tips below their PIPs)
+        thumb_points_up = (
+            thumb_tip[1] < thumb_mcp[1] - 0.05
+            and thumb_tip[1] < wrist[1] - 0.05
+        )
+        all_others_curled = (
+            not fingers["index"]
+            and not fingers["middle"]
+            and not fingers["ring"]
+            and not fingers["pinky"]
+        )
+
+        if thumb_points_up and all_others_curled and thumb_extended:
             gesture = config.GESTURE_THUMBS_UP
 
-        # Check pinch: thumb and index close together
-        elif avg_pinch < 0.06:
+        # Check pinch: thumb and index tips very close
+        elif avg_pinch < config.PINCH_GRAB_THRESHOLD:
             gesture = config.GESTURE_PINCH
 
-        # Check point: only index finger extended
-        elif fingers["index"] and not fingers["middle"] and not fingers["ring"] and not fingers["pinky"]:
+        # Check point: ONLY index finger extended, rest curled
+        elif (
+            fingers["index"]
+            and not fingers["middle"]
+            and not fingers["ring"]
+            and not fingers["pinky"]
+        ):
             gesture = config.GESTURE_POINT
 
-        # Check fist: all fingers curled
-        elif not any(fingers.values()):
+        # Check fist: ALL fingers curled, thumb not extended
+        elif (
+            not fingers["index"]
+            and not fingers["middle"]
+            and not fingers["ring"]
+            and not fingers["pinky"]
+            and not thumb_extended
+        ):
             gesture = config.GESTURE_FIST
 
-        # Check victory: index and middle extended, others curled
-        elif fingers["index"] and fingers["middle"] and not fingers["ring"] and not fingers["pinky"]:
+        # Check victory: index + middle extended, ring + pinky curled
+        elif (
+            fingers["index"]
+            and fingers["middle"]
+            and not fingers["ring"]
+            and not fingers["pinky"]
+        ):
             gesture = config.GESTURE_VICTORY
 
-        # Check open hand: all fingers extended
-        elif all(fingers.values()):
+        # Check open hand: ALL fingers extended
+        elif (
+            fingers["index"]
+            and fingers["middle"]
+            and fingers["ring"]
+            and fingers["pinky"]
+        ):
             gesture = config.GESTURE_OPEN_HAND
 
         # Smooth gesture with history
@@ -123,43 +182,9 @@ class GestureRecognizer:
 
         return self.current_gesture
 
-    def _check_fingers_extended(self, landmarks):
-        """Check which fingers are extended (straight)."""
-        # A finger is extended if its tip is farther from wrist than its PIP joint
-        wrist = landmarks[self.WRIST]
-
-        def is_extended(tip_idx, pip_idx):
-            tip = landmarks[tip_idx]
-            pip = landmarks[pip_idx]
-            tip_dist = self._euclidean_2d(tip, wrist)
-            pip_dist = self._euclidean_2d(pip, wrist)
-            return tip_dist > pip_dist
-
-        # Thumb: compare x-distance from MCP (thumb extends sideways)
-        thumb_tip = landmarks[self.THUMB_TIP]
-        thumb_mcp = landmarks[self.THUMB_MCP]
-        thumb_extended = abs(thumb_tip[0] - thumb_mcp[0]) > 0.05
-
-        return {
-            "thumb": thumb_extended,
-            "index": is_extended(self.INDEX_TIP, self.INDEX_PIP),
-            "middle": is_extended(self.MIDDLE_TIP, self.MIDDLE_PIP),
-            "ring": is_extended(self.RING_TIP, self.RING_PIP),
-            "pinky": is_extended(self.PINKY_TIP, self.PINKY_PIP),
-        }
-
-    def _is_thumbs_up(self, landmarks, fingers):
-        """Detect thumbs up gesture: thumb points up, others curled."""
-        thumb_tip = landmarks[self.THUMB_TIP]
-        thumb_mcp = landmarks[self.THUMB_MCP]
-        wrist = landmarks[self.WRIST]
-
-        # Thumb should be extended upward (tip above MCP in y, since y increases downward)
-        thumb_up = thumb_tip[1] < thumb_mcp[1] - 0.03
-        # All other fingers curled
-        others_curled = not fingers["index"] and not fingers["middle"] and not fingers["ring"] and not fingers["pinky"]
-
-        return thumb_up and others_curled and fingers["thumb"]
+    def is_pinching(self):
+        """Check if currently in a pinch gesture (for grab detection)."""
+        return self._pinch_distance < config.PINCH_GRAB_THRESHOLD
 
     def _smooth_gesture(self):
         """Majority vote over gesture history for smoothing."""
@@ -173,10 +198,10 @@ class GestureRecognizer:
         return max(counts, key=counts.get)
 
     def get_pinch_distance_normalized(self):
-        """Get the smoothed pinch distance as a value useful for frame sizing.
+        """Get the smoothed pinch distance.
 
         Returns:
-            float: Average pinch distance (normalized, 0-1 range roughly).
+            float: Average pinch distance (normalized).
         """
         if not self._pinch_distance_history:
             return 0.0

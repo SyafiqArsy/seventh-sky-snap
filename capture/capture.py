@@ -64,6 +64,23 @@ class PhotoCapture:
 
         return cropped
 
+    def capture_full(self, frame_bgr):
+        """Capture the full camera frame without cropping.
+
+        Args:
+            frame_bgr: The current camera frame (BGR, already flipped).
+
+        Returns:
+            numpy.ndarray: The full frame image, or None on failure.
+        """
+        if frame_bgr is None:
+            return None
+
+        self.captured_image = frame_bgr.copy()
+        self.captured_pil = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+        self.capture_time = time.time()
+        return self.captured_image
+
     def save_temp(self, filename=None):
         """Save captured image to the saved directory.
 

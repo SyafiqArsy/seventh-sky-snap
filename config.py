@@ -24,7 +24,8 @@ PINCH_DISTANCE_MAX = 250.0
 FRAME_SIZE_MIN = 150
 FRAME_SIZE_MAX = 500
 GESTURE_SMOOTHING = 5
-GESTURE_HOLD_FRAMES = 15
+GESTURE_HOLD_FRAMES = 25
+PINCH_GRAB_THRESHOLD = 0.05
 
 # ── Capture ─────────────────────────────────────────────────
 COUNTDOWN_SECONDS = 3
@@ -41,7 +42,7 @@ OUTPUT_MAX_HEIGHT = 700
 # ── Puzzle ──────────────────────────────────────────────────
 PUZZLE_ROWS = 3
 PUZZLE_COLS = 3
-SNAP_THRESHOLD = 40
+SNAP_THRESHOLD = 100
 
 # ── Colors (RGB) ────────────────────────────────────────────
 COLOR_BG = (15, 15, 25)
