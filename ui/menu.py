@@ -143,16 +143,139 @@ class StartScreen:
         surface.blit(ver, (config.WINDOW_WIDTH - 60, config.WINDOW_HEIGHT - 30))
 
 
+class StatusBar:
+    """Dynamic status bar at the top center of the screen."""
+
+    def __init__(self):
+        self.font = None
+        self.text = ""
+        self.alpha = 0
+        self._target_alpha = 0
+
+    def _get_font(self):
+        if self.font is None:
+            self.font = pygame.font.SysFont("arial", 18, bold=True)
+        return self.font
+
+    def update(self, state, dt, countdown_number=0):
+        """Update status text based on current state.
+
+        Args:
+            state: Current application state string.
+            dt: Delta time in seconds.
+            countdown_number: Current countdown number (for countdown state).
+        """
+        msg = config.STATUS_MESSAGES.get(state, "")
+        if state == config.STATE_CAPTURE_COUNTDOWN and countdown_number > 0:
+            msg = f"Hold Gesture — Capture in {countdown_number}"
+        self.text = msg
+        self._target_alpha = 255 if msg else 0
+        # Smooth alpha transition
+        if self.alpha < self._target_alpha:
+            self.alpha = min(self._target_alpha, self.alpha + 600 * dt)
+        elif self.alpha > self._target_alpha:
+            self.alpha = max(self._target_alpha, self.alpha - 400 * dt)
+
+    def draw(self, surface):
+        """Draw the status bar on the surface."""
+        if self.alpha <= 0 or not self.text:
+            return
+
+        font = self._get_font()
+        text_surf = font.render(self.text, True, config.COLOR_STATUS_ACTIVE)
+        text_surf.set_alpha(int(self.alpha))
+
+        # Center horizontally, near top
+        cx = config.WINDOW_WIDTH // 2
+        tx = cx - text_surf.get_width() // 2
+        ty = 12
+
+        # Background pill
+        pad_x, pad_y = 16, 6
+        bg_rect = pygame.Rect(tx - pad_x, ty - pad_y,
+                              text_surf.get_width() + pad_x * 2,
+                              text_surf.get_height() + pad_y * 2)
+        bg_surf = pygame.Surface((bg_rect.w, bg_rect.h), pygame.SRCALPHA)
+        bg_surf.fill((0, 0, 0, int(self.alpha * 0.5)))
+        surface.blit(bg_surf, bg_rect.topleft)
+        surface.blit(text_surf, (tx, ty))
+
+
+class InfoPanel:
+    """Lightweight info display at bottom corners."""
+
+    def __init__(self, side="left"):
+        self.font = None
+        self.side = side  # "left" or "right"
+        self.lines = []
+        self.alpha = 150
+
+    def _get_font(self):
+        if self.font is None:
+            self.font = pygame.font.SysFont("arial", 13)
+        return self.font
+
+    def update(self, lines):
+        """Update the info lines to display.
+
+        Args:
+            lines: list of str, each line of info text.
+        """
+        self.lines = lines
+
+    def draw(self, surface):
+        """Draw info panel at the bottom corner."""
+        if not self.lines:
+            return
+
+        font = self._get_font()
+        line_h = 18
+        total_h = len(self.lines) * line_h + 8
+
+        if self.side == "left":
+            x = 15
+        else:
+            # Right-align: find max width
+            max_w = max(font.render(l, True, (255, 255, 255)).get_width() for l in self.lines)
+            x = config.WINDOW_WIDTH - max_w - 15
+
+        y = config.WINDOW_HEIGHT - total_h - 8
+
+        # Background
+        max_w = max(font.render(l, True, (255, 255, 255)).get_width() for l in self.lines)
+        bg_surf = pygame.Surface((max_w + 12, total_h), pygame.SRCALPHA)
+        bg_surf.fill((0, 0, 0, int(self.alpha * 0.4)))
+        surface.blit(bg_surf, (x - 6, y - 4))
+
+        for i, line in enumerate(self.lines):
+            text_surf = font.render(line, True, config.COLOR_INFO_TEXT)
+            text_surf.set_alpha(self.alpha)
+            surface.blit(text_surf, (x, y + i * line_h))
+
+
 class CameraView:
-    """Camera view with frame overlay and hand tracking visualization."""
+    """Camera view with frame overlay and hand tracking visualization.
+
+    The frame is controlled by two corners:
+      - top_left (x1, y1) controlled by left hand
+      - bottom_right (x2, y2) controlled by right hand
+    """
 
     def __init__(self):
         self.font = None
         self.small_font = None
-        self.frame_size = (config.FRAME_SIZE_MIN + config.FRAME_SIZE_MAX) // 2
-        self.frame_x = 0
-        self.frame_y = 0
-        self._update_frame_rect()
+
+        # Frame defined by two corners (in pixel coords)
+        self.frame_x1 = 0
+        self.frame_y1 = 0
+        self.frame_x2 = 0
+        self.frame_y2 = 0
+        self.frame_visible = False
+
+        # Animation
+        self._dash_offset = 0
+        self._frame_alpha = 0        # For fade-in animation
+        self._frame_scale = 0.0      # For scale-in animation
 
     def _get_fonts(self):
         if self.font is None:
@@ -160,55 +283,195 @@ class CameraView:
             self.small_font = pygame.font.SysFont("arial", 16)
         return self.font, self.small_font
 
-    def _update_frame_rect(self):
-        """Recalculate frame rectangle based on current size."""
-        cx = config.WINDOW_WIDTH // 2
-        cy = config.WINDOW_HEIGHT // 2
-        self.frame_x = cx - self.frame_size // 2
-        self.frame_y = cy - self.frame_size // 2
+    def set_frame_corners(self, x1, y1, x2, y2):
+        """Set frame position from two corner points.
 
-    def set_frame_size(self, size):
-        self.frame_size = max(config.FRAME_SIZE_MIN, min(config.FRAME_SIZE_MAX, int(size)))
-        self._update_frame_rect()
+        Args:
+            x1, y1: Top-left corner (controlled by left hand).
+            x2, y2: Bottom-right corner (controlled by right hand).
+        """
+        # Ensure x1 < x2 and y1 < y2
+        self.frame_x1 = min(x1, x2)
+        self.frame_y1 = min(y1, y2)
+        self.frame_x2 = max(x1, x2)
+        self.frame_y2 = max(y1, y2)
+        self.frame_visible = True
+
+    def hide_frame(self):
+        """Hide the capture frame."""
+        self.frame_visible = False
 
     def get_frame_rect(self):
-        return (self.frame_x, self.frame_y, self.frame_size, self.frame_size)
+        """Get the frame as (x, y, w, h)."""
+        w = max(0, self.frame_x2 - self.frame_x1)
+        h = max(0, self.frame_y2 - self.frame_y1)
+        return (self.frame_x1, self.frame_y1, w, h)
+
+    def get_frame_size_label(self):
+        """Get a human-readable size label."""
+        w = self.frame_x2 - self.frame_x1
+        h = self.frame_y2 - self.frame_y1
+        area = w * h
+        if area < 200 * 200:
+            return "Small"
+        elif area < 400 * 400:
+            return "Medium"
+        else:
+            return "Large"
+
+    def _draw_dashed_rect(self, surface, rect, color, dash_len=8, gap_len=6, width=1):
+        """Draw a rectangle with dashed (putus-putus) lines.
+
+        Args:
+            surface: pygame.Surface to draw on.
+            rect: pygame.Rect defining the rectangle.
+            color: RGB or RGBA color tuple.
+            dash_len: Length of each dash in pixels.
+            gap_len: Length of each gap in pixels.
+            width: Line width.
+        """
+        x, y, w, h = rect
+        total_len = dash_len + gap_len
+
+        # Top edge
+        self._draw_dashed_line(surface, (x, y), (x + w, y), color, dash_len, gap_len, width)
+        # Bottom edge
+        self._draw_dashed_line(surface, (x, y + h), (x + w, y + h), color, dash_len, gap_len, width)
+        # Left edge
+        self._draw_dashed_line(surface, (x, y), (x, y + h), color, dash_len, gap_len, width)
+        # Right edge
+        self._draw_dashed_line(surface, (x + w, y), (x + w, y + h), color, dash_len, gap_len, width)
+
+    def _draw_dashed_line(self, surface, start, end, color, dash_len, gap_len, width):
+        """Draw a single dashed line segment."""
+        sx, sy = start
+        ex, ey = end
+        dx = ex - sx
+        dy = ey - sy
+        length = math.sqrt(dx * dx + dy * dy)
+        if length == 0:
+            return
+
+        ux, uy = dx / length, dy / length  # unit vector
+        total_len = dash_len + gap_len
+
+        # Apply animated offset
+        offset = self._dash_offset % total_len
+        pos = -offset
+
+        while pos < length:
+            dash_start = max(0, pos)
+            dash_end = min(length, pos + dash_len)
+            if dash_end > dash_start:
+                p1 = (int(sx + ux * dash_start), int(sy + uy * dash_start))
+                p2 = (int(sx + ux * dash_end), int(sy + uy * dash_end))
+                pygame.draw.line(surface, color, p1, p2, width)
+            pos += total_len
+
+    def update_animation(self, dt):
+        """Update dashed line animation offset."""
+        self._dash_offset += dt * 30  # Speed of dash animation
+
+    def update_frame_animation(self, dt):
+        """Update frame appearance animation (fade + scale)."""
+        if self.frame_visible:
+            self._frame_alpha = min(255, self._frame_alpha + 600 * dt)
+            self._frame_scale = min(1.0, self._frame_scale + 5.0 * dt)
+        else:
+            self._frame_alpha = max(0, self._frame_alpha - 400 * dt)
+            self._frame_scale = max(0.0, self._frame_scale - 3.0 * dt)
 
     def draw_frame_overlay(self, surface):
-        """Draw the capture frame overlay on the camera view."""
+        """Draw the capture frame overlay with dashed lines and sky blue accents."""
+        if self._frame_alpha <= 0 or self._frame_scale <= 0:
+            return
+
         font, small_font = self._get_fonts()
+        alpha = int(self._frame_alpha)
+
+        fx1, fy1 = self.frame_x1, self.frame_y1
+        fx2, fy2 = self.frame_x2, self.frame_y2
+        fw = fx2 - fx1
+        fh = fy2 - fy1
+
+        if fw < 10 or fh < 10:
+            return
+
+        # Apply scale animation (scale from center of frame)
+        if self._frame_scale < 1.0:
+            cx = (fx1 + fx2) / 2
+            cy = (fy1 + fy2) / 2
+            s = self._frame_scale
+            fx1 = int(cx - (cx - fx1) * s)
+            fy1 = int(cy - (cy - fy1) * s)
+            fx2 = int(cx + (fx2 - cx) * s)
+            fy2 = int(cy + (fy2 - cy) * s)
+            fw = fx2 - fx1
+            fh = fy2 - fy1
 
         # Semi-transparent overlay outside the frame
         overlay = pygame.Surface((config.WINDOW_WIDTH, config.WINDOW_HEIGHT), pygame.SRCALPHA)
-
-        # Darken outside the frame
-        overlay.fill((0, 0, 0, 100))
+        overlay.fill((0, 0, 0, int(100 * alpha / 255)))
         # Cut out the frame area
-        pygame.draw.rect(overlay, (0, 0, 0, 0),
-                         (self.frame_x, self.frame_y, self.frame_size, self.frame_size))
+        pygame.draw.rect(overlay, (0, 0, 0, 0), (fx1, fy1, fw, fh))
         surface.blit(overlay, (0, 0))
 
-        # Frame border with animated dash effect
-        border_rect = pygame.Rect(self.frame_x, self.frame_y, self.frame_size, self.frame_size)
-        pygame.draw.rect(surface, config.COLOR_FRAME_BORDER, border_rect, 3, border_radius=4)
+        # Dashed white frame border
+        frame_color = (*config.COLOR_DASHED_FRAME[:3], alpha)
+        self._draw_dashed_rect(surface, (fx1, fy1, fw, fh), frame_color,
+                               dash_len=10, gap_len=7, width=2)
 
-        # Corner accents
-        corner_len = 20
+        # Corner accents with sky blue
+        corner_len = 25
+        accent_color = (*config.COLOR_SKY_BLUE[:3], alpha)
         corners = [
-            (self.frame_x, self.frame_y, 1, 1),
-            (self.frame_x + self.frame_size, self.frame_y, -1, 1),
-            (self.frame_x, self.frame_y + self.frame_size, 1, -1),
-            (self.frame_x + self.frame_size, self.frame_y + self.frame_size, -1, -1),
+            (fx1, fy1, 1, 1),
+            (fx2, fy1, -1, 1),
+            (fx1, fy2, 1, -1),
+            (fx2, fy2, -1, -1),
         ]
         for cx, cy, dx, dy in corners:
-            pygame.draw.line(surface, config.COLOR_ACCENT_LIGHT,
+            pygame.draw.line(surface, accent_color,
                              (cx, cy), (cx + corner_len * dx, cy), 3)
-            pygame.draw.line(surface, config.COLOR_ACCENT_LIGHT,
+            pygame.draw.line(surface, accent_color,
                              (cx, cy), (cx, cy + corner_len * dy), 3)
 
         # Frame size label
-        size_text = small_font.render(f"Frame: {self.frame_size}px", True, config.COLOR_TEXT_DIM)
-        surface.blit(size_text, (self.frame_x, self.frame_y - 25))
+        size_label = self.get_frame_size_label()
+        size_text = small_font.render(f"Frame: {size_label} ({fw}x{fh})", True, config.COLOR_STATUS_DIM)
+        size_text.set_alpha(alpha)
+        surface.blit(size_text, (fx1, max(5, fy1 - 25)))
+
+    def draw_instructions(self, surface, state, hand_count=0):
+        """Draw instruction text for the current state.
+
+        Args:
+            surface: pygame.Surface.
+            state: Current application state.
+            hand_count: Number of detected hands.
+        """
+        font, small_font = self._get_fonts()
+
+        if state == config.STATE_IDLE:
+            if hand_count == 0:
+                lines = ["Show both hands to begin"]
+            elif hand_count == 1:
+                lines = ["Show both hands to begin", "Need two hands detected"]
+            else:
+                lines = ["Pinch both hands to create frame"]
+        elif state == config.STATE_FRAME_CREATION:
+            lines = ["Adjust frame with both pinching hands",
+                     "Open both palms to capture"]
+        else:
+            return
+
+        # Draw instruction lines centered
+        y = config.WINDOW_HEIGHT - 60
+        for line in lines:
+            text = small_font.render(line, True, config.COLOR_TEXT)
+            text.set_alpha(180)
+            surface.blit(text, (config.WINDOW_WIDTH // 2 - text.get_width() // 2, y))
+            y += 22
 
     def draw_camera_frame(self, surface, frame_bgr):
         """Convert and draw a BGR camera frame onto the pygame surface.
@@ -238,17 +501,21 @@ class CameraView:
         y = (config.WINDOW_HEIGHT - new_h) // 2
         surface.blit(frame_surface, (x, y))
 
-    def draw_hand_landmarks(self, surface, landmarks_px):
-        """Draw hand landmarks on the surface.
+    def draw_hand_landmarks(self, surface, landmarks_px, alpha=170):
+        """Draw hand landmarks with transparent white skeleton style.
 
         Args:
             surface: pygame.Surface.
             landmarks_px: list of (int, int) pixel coordinates for 21 landmarks.
+            alpha: Transparency level (0-255). Default 170 (~67%).
         """
         if landmarks_px is None:
             return
 
-        # Draw connections
+        # Create a separate surface for transparency
+        skeleton_surf = pygame.Surface((config.WINDOW_WIDTH, config.WINDOW_HEIGHT), pygame.SRCALPHA)
+
+        # Draw connections — thin white lines with transparency
         connections = [
             (0, 1), (1, 2), (2, 3), (3, 4),       # Thumb
             (0, 5), (5, 6), (6, 7), (7, 8),       # Index
@@ -257,15 +524,18 @@ class CameraView:
             (0, 17), (17, 18), (18, 19), (19, 20), # Pinky
             (5, 9), (9, 13), (13, 17),             # Palm
         ]
+        line_color = (*config.COLOR_HAND_SKELETON_LINE[:3], alpha)
         for (i, j) in connections:
             if i < len(landmarks_px) and j < len(landmarks_px):
-                pygame.draw.line(surface, config.COLOR_HAND_CONNECTIONS,
-                                 landmarks_px[i], landmarks_px[j], 2)
+                pygame.draw.line(skeleton_surf, line_color,
+                                 landmarks_px[i], landmarks_px[j], 1)
 
-        # Draw points
+        # Draw points — small white dots with transparency
+        dot_color = (*config.COLOR_HAND_SKELETON_DOT[:3], int(alpha * 0.9))
         for (px, py) in landmarks_px:
-            pygame.draw.circle(surface, config.COLOR_HAND_LANDMARK, (px, py), 5)
-            pygame.draw.circle(surface, (255, 255, 255), (px, py), 2)
+            pygame.draw.circle(skeleton_surf, dot_color, (px, py), 3)
+
+        surface.blit(skeleton_surf, (0, 0))
 
     def draw_hud(self, surface, state, gesture="none", pieces_solved=0, pieces_total=0):
         """Draw heads-up display information.
@@ -279,7 +549,7 @@ class CameraView:
         """
         font, small_font = self._get_fonts()
 
-        # State indicator (top-left)
+        # State indicator (top-left) — kept for backward compatibility
         state_labels = {
             config.STATE_CAMERA_READY: "Starting camera...",
             config.STATE_TRACKING: "Hand detected - Adjust frame size",

@@ -8,11 +8,14 @@ Seventh Sky Snap combines **hand tracking**, **image processing**, and an **inte
 
 ### Features
 
-- **Hand Tracking**: Real-time hand detection using MediaPipe with 21 landmark points
+- **Hand Tracking**: Real-time hand detection using MediaPipe with 21 landmark points per hand
+- **Two-Hand Detection**: Simultaneous tracking of both hands for interactive polaroid manipulation
 - **Gesture Control**: Pinch to resize frame, thumbs up to capture
 - **Polaroid Photos**: Automatic polaroid-style framing with vintage filters
 - **Puzzle Game**: Solve a sliding puzzle made from your captured photo
-- **Visual Effects**: Confetti, particle effects, smooth animations, and countdown timers
+- **Interactive Polaroid Mode**: After solving the puzzle, manipulate the polaroid with two hands — move, rotate, and scale
+- **Premium UI**: Dashed frame lines, transparent hand skeleton, dynamic status bar, info panels
+- **Visual Effects**: Shutter flash, confetti, particle effects, smooth animations, and countdown timers
 - **Sound Effects**: Camera shutter, countdown ticks, and victory fanfare
 
 ## Tech Stack
@@ -58,8 +61,9 @@ seventh-sky-snap/
 │   └── validator.py        # Puzzle completion validation
 │
 ├── ui/
-│   ├── animation.py        # Particles, transitions, easing, countdown visuals
-│   └── menu.py             # All UI screens (start, camera, puzzle, result)
+│   ├── animation.py        # Particles, transitions, easing, shutter flash, polaroid reveal
+│   ├── menu.py             # All UI screens (start, camera, puzzle, result, status bar, info panels)
+│   └── polaroid_interaction.py  # Interactive polaroid mode with two-hand gestures
 │
 ├── assets/
 │   ├── frame/              # Polaroid frame overlays
@@ -74,32 +78,50 @@ seventh-sky-snap/
 The application flows through these states:
 
 ```
-idle → camera_ready → tracking → resize_mode → capture_countdown
-     → image_processing → puzzle_mode → solved
-     → polaroid_presentation → save_completed → idle
+idle (camera on, show instructions)
+  → frame_creation (both pinching, frame corners follow hands)
+  → capture_countdown (both open palms, frame locked, countdown)
+  → image_processing → puzzle_mode → solved
+  → polaroid_presentation → interactive_polaroid
+  → save_completed → idle
 ```
 
 | State | Description |
 |-------|-------------|
-| **idle** | Start screen with "Start Camera" button |
-| **camera_ready** | Camera active, waiting for hand detection |
-| **tracking** | Hand detected, tracking gestures in real-time |
-| **resize_mode** | Pinch gesture active, resizing capture frame |
-| **capture_countdown** | 3-2-1 countdown before photo capture |
-| **image_processing** | Cropping, enhancing, and creating polaroid |
-| **puzzle_mode** | Drag puzzle pieces to reconstruct the photo |
-| **solved** | Puzzle completed, confetti celebration |
-| **polaroid_presentation** | Display final polaroid result |
-| **save_completed** | Photo saved to local storage |
+| **idle** | Camera active, "Show both hands to begin" — waiting for two hands |
+| **frame_creation** | Both hands pinching — frame corners follow left/right hand positions |
+| **capture_countdown** | Both open palms detected — frame locked, 3-2-1 countdown |
+| **image_processing** | Camera freeze, crop frame area, enhance, create polaroid |
+| **puzzle_mode** | Drag puzzle pieces (raw photo) to reconstruct the image |
+| **solved** | Puzzle completed, border fade animation, confetti celebration |
+| **polaroid_presentation** | Polaroid slides up from bottom with reveal animation |
+| **interactive_polaroid** | Two-hand mode: move, rotate, and scale the polaroid |
+| **save_completed** | Photo saved, "Photo Saved!" notification |
 
 ## Gesture Controls
 
+### Camera / Frame Creation Mode
+
 | Gesture | Action |
 |---------|--------|
-| **Open Hand** | Default tracking state |
-| **Pinch** (thumb + index) | Resize the capture frame |
-| **Thumbs Up** | Trigger photo capture (hold for 0.5s) |
-| **Point** (index finger) | Available for puzzle interaction |
+| **Show both hands** | Enter frame creation mode |
+| **Both hands pinch** | Create and adjust capture frame — left hand = top-left corner, right hand = bottom-right corner |
+| **Both hands open palm** | Lock frame and start 3-2-1 countdown |
+
+### Puzzle Mode
+
+| Gesture | Action |
+|---------|--------|
+| **Point** (index finger) | Move cursor over puzzle pieces |
+| **Pinch** (thumb + index) | Grab and drag a puzzle piece |
+
+### Interactive Polaroid Mode (Two Hands)
+
+| Gesture | Action |
+|---------|--------|
+| **Move both hands** | Translate/move the polaroid on screen |
+| **Tilt hands** (angle between hands) | Rotate the polaroid |
+| **Spread/close hands** | Scale the polaroid larger/smaller |
 
 ## Setup & Installation
 
@@ -138,15 +160,16 @@ python app.py
 
 ## How It Works
 
-1. **Start**: Launch the app and click "Start Camera"
-2. **Track**: Show your hand to the webcam — the system detects 21 landmark points
-3. **Frame**: Use pinch gesture (thumb + index finger) to resize the capture frame
-4. **Capture**: Show thumbs up and hold for the countdown
-5. **Process**: The photo is cropped, enhanced, and framed as a polaroid
-6. **Puzzle**: Solve the 3x3 puzzle by dragging pieces to correct positions
-7. **Celebrate**: Enjoy confetti and see your completed polaroid!
-8. **Save**: Photo is saved locally in the `saved/` directory
-9. **Repeat**: Start a new session or return to the main menu
+1. **Launch**: App opens with camera active, showing "Show both hands to begin"
+2. **Detect**: Show both hands to the webcam — system detects 21 landmark points per hand
+3. **Frame**: Pinch with both hands — left hand controls top-left corner, right hand controls bottom-right corner. The frame follows your fingers in real-time
+4. **Capture**: Open both palms to lock the frame — 3-2-1 countdown starts
+5. **Crop & Process**: Camera captures and crops the frame area, enhances the photo, creates a polaroid version
+6. **Puzzle**: Solve the 3x3 puzzle using the raw photo pieces scattered around the screen
+7. **Celebrate**: Puzzle borders fade, confetti explodes, polaroid slides up from below
+8. **Interact**: Use both hands to move, rotate, and scale the polaroid in free space
+9. **Save**: After 5 seconds of inactivity, the polaroid returns to center and saves automatically
+10. **Repeat**: ESC to return and start a new session
 
 ## Configuration
 
@@ -167,9 +190,9 @@ All settings are centralized in `config.py`:
 - [ ] Photo gallery with browsing
 - [ ] Cloud storage integration
 - [ ] Multiple puzzle difficulty levels
-- [ ] Hand gesture puzzle interaction (not just mouse)
+- [x] Hand gesture puzzle interaction (not just mouse)
 - [ ] Music and ambient sound effects
-- [ ] Multi-hand gesture support
+- [x] Multi-hand gesture support (Interactive Polaroid Mode)
 
 ## License
 

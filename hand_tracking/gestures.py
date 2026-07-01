@@ -10,7 +10,11 @@ import config
 
 
 class GestureRecognizer:
-    """Recognizes gestures from hand landmark data."""
+    """Recognizes gestures from hand landmark data.
+
+    Supports both single-hand gesture classification and two-hand
+    interaction tracking (midpoint, rotation, distance for polaroid control).
+    """
 
     # MediaPipe landmark indices
     WRIST = 0
@@ -43,6 +47,18 @@ class GestureRecognizer:
         self._pinch_distance_history = deque(maxlen=config.GESTURE_SMOOTHING)
         self.index_finger_tip = None  # (x, y) normalized
         self._hand_detected_frames = 0
+
+        # Two-hand interaction state
+        self._two_hand_active = False
+        self._midpoint = (0.5, 0.5)          # normalized
+        self._rotation_angle = 0.0            # degrees
+        self._hand_distance = 0.0             # normalized
+        self._smoothed_midpoint = (0.5, 0.5)
+        self._smoothed_angle = 0.0
+        self._smoothed_distance = 0.0
+        self._midpoint_history = deque(maxlen=5)
+        self._angle_history = deque(maxlen=5)
+        self._distance_history = deque(maxlen=5)
 
     def update(self, landmarks):
         """Analyze landmarks and determine the current gesture.
@@ -232,3 +248,130 @@ class GestureRecognizer:
             int(self.index_finger_tip[0] * frame_width),
             int(self.index_finger_tip[1] * frame_height),
         )
+
+    # ── Two-Hand Interaction ──────────────────────────────────
+
+    def update_two_hands(self, left_landmarks, right_landmarks):
+        """Compute two-hand interaction parameters.
+
+        Calculates the midpoint, rotation angle, and distance between
+        two hands for polaroid manipulation.
+
+        Args:
+            left_landmarks: List of 21 (x,y,z) tuples for left hand, or None.
+            right_landmarks: List of 21 (x,y,z) tuples for right hand, or None.
+
+        Returns:
+            bool: True if two-hand data was computed.
+        """
+        if left_landmarks is None or right_landmarks is None:
+            self._two_hand_active = False
+            return False
+
+        if len(left_landmarks) < 21 or len(right_landmarks) < 21:
+            self._two_hand_active = False
+            return False
+
+        self._two_hand_active = True
+
+        # Use wrist (landmark 0) as hand center
+        l_wrist = left_landmarks[self.WRIST]
+        r_wrist = right_landmarks[self.WRIST]
+
+        # Midpoint between two hands (normalized 0-1)
+        mx = (l_wrist[0] + r_wrist[0]) / 2.0
+        my = (l_wrist[1] + r_wrist[1]) / 2.0
+        self._midpoint = (mx, my)
+        self._midpoint_history.append((mx, my))
+
+        # Rotation angle: angle of the line from left hand to right hand
+        # atan2(dy, dx) gives radians, convert to degrees
+        dx = r_wrist[0] - l_wrist[0]
+        dy = r_wrist[1] - l_wrist[1]
+        angle_rad = math.atan2(dy, dx)
+        angle_deg = math.degrees(angle_rad)
+        self._rotation_angle = angle_deg
+        self._angle_history.append(angle_deg)
+
+        # Distance between hands (normalized, using Euclidean in normalized space)
+        dist = math.sqrt(dx * dx + dy * dy)
+        self._hand_distance = dist
+        self._distance_history.append(dist)
+
+        # Apply smoothing
+        self._smoothed_midpoint = self._smooth_value_2d(self._midpoint_history)
+        self._smoothed_angle = self._smooth_value_1d(self._angle_history)
+        self._smoothed_distance = self._smooth_value_1d(self._distance_history)
+
+        return True
+
+    def _smooth_value_1d(self, history):
+        """Average a 1D history buffer."""
+        if not history:
+            return 0.0
+        return sum(history) / len(history)
+
+    def _smooth_value_2d(self, history):
+        """Average a 2D history buffer."""
+        if not history:
+            return (0.5, 0.5)
+        sx = sum(p[0] for p in history) / len(history)
+        sy = sum(p[1] for p in history) / len(history)
+        return (sx, sy)
+
+    def is_two_hand_active(self):
+        """Check if two hands are currently tracked.
+
+        Returns:
+            bool: True if two-hand interaction is active.
+        """
+        return self._two_hand_active
+
+    def get_midpoint(self):
+        """Get the smoothed midpoint between two hands.
+
+        Returns:
+            tuple (float, float): Normalized (x, y) coordinates.
+        """
+        return self._smoothed_midpoint
+
+    def get_midpoint_pixels(self, frame_width, frame_height):
+        """Get the smoothed midpoint in pixel coordinates.
+
+        Returns:
+            tuple (int, int) or None.
+        """
+        if not self._two_hand_active:
+            return None
+        mx, my = self._smoothed_midpoint
+        return (int(mx * frame_width), int(my * frame_height))
+
+    def get_rotation_angle(self):
+        """Get the smoothed rotation angle between two hands.
+
+        Returns:
+            float: Angle in degrees. 0 = hands at same height,
+                   positive = right hand lower, negative = right hand higher.
+        """
+        return self._smoothed_angle
+
+    def get_hand_distance(self):
+        """Get the smoothed distance between two hands.
+
+        Returns:
+            float: Normalized distance (0-1 range roughly).
+        """
+        return self._smoothed_distance
+
+    def reset_two_hand(self):
+        """Reset two-hand interaction state."""
+        self._two_hand_active = False
+        self._midpoint = (0.5, 0.5)
+        self._rotation_angle = 0.0
+        self._hand_distance = 0.0
+        self._smoothed_midpoint = (0.5, 0.5)
+        self._smoothed_angle = 0.0
+        self._smoothed_distance = 0.0
+        self._midpoint_history.clear()
+        self._angle_history.clear()
+        self._distance_history.clear()

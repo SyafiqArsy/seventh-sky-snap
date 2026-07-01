@@ -321,3 +321,151 @@ class GestureIndicator:
         surface.blit(bg_surf, bg_rect.topleft)
 
         surface.blit(text, (x, y))
+
+
+class ShutterFlash:
+    """Camera shutter flash effect — white overlay that fades out quickly."""
+
+    def __init__(self):
+        self.alpha = 0
+        self.active = False
+        self._duration = 0.3  # seconds
+        self._elapsed = 0.0
+
+    def trigger(self):
+        """Start the flash effect."""
+        self.active = True
+        self.alpha = 220
+        self._elapsed = 0.0
+
+    def update(self, dt):
+        """Update flash fade-out."""
+        if not self.active:
+            return
+        self._elapsed += dt
+        t = min(1.0, self._elapsed / self._duration)
+        self.alpha = int(220 * (1.0 - Easing.ease_out_cubic(t)))
+        if t >= 1.0:
+            self.active = False
+            self.alpha = 0
+
+    def draw(self, surface):
+        """Draw the white flash overlay."""
+        if not self.active or self.alpha <= 0:
+            return
+        flash_surf = pygame.Surface((config.WINDOW_WIDTH, config.WINDOW_HEIGHT), pygame.SRCALPHA)
+        flash_surf.fill((255, 255, 255, self.alpha))
+        surface.blit(flash_surf, (0, 0))
+
+    @property
+    def is_active(self):
+        return self.active
+
+
+class PolaroidReveal:
+    """Animation for polaroid sliding up from the bottom of the screen."""
+
+    def __init__(self):
+        self.active = False
+        self.progress = 0.0  # 0 = off-screen, 1 = fully visible
+        self._duration = 0.8  # seconds
+        self._elapsed = 0.0
+        self.polaroid_surface = None
+        self.target_y = 0
+        self.start_y = 0
+
+    def start(self, polaroid_surface):
+        """Begin the polaroid reveal animation.
+
+        Args:
+            polaroid_surface: pygame.Surface of the polaroid to reveal.
+        """
+        self.active = True
+        self.progress = 0.0
+        self._elapsed = 0.0
+        self.polaroid_surface = polaroid_surface
+
+        # Scale polaroid to fit nicely on screen
+        if polaroid_surface:
+            pw, ph = polaroid_surface.get_size()
+            scale = min(500 / pw, 450 / ph)
+            self.display_w = int(pw * scale)
+            self.display_h = int(ph * scale)
+            self.display_surf = pygame.transform.smoothscale(
+                polaroid_surface, (self.display_w, self.display_h)
+            )
+            # Target Y: centered vertically
+            self.target_y = (config.WINDOW_HEIGHT - self.display_h) // 2
+            # Start Y: below screen
+            self.start_y = config.WINDOW_HEIGHT + 50
+
+    def update(self, dt):
+        """Update the slide-up animation."""
+        if not self.active:
+            return
+        self._elapsed += dt
+        t = min(1.0, self._elapsed / self._duration)
+        self.progress = Easing.ease_out_cubic(t)
+
+    def draw(self, surface):
+        """Draw the polaroid at its current animated position."""
+        if not self.active or self.polaroid_surface is None:
+            return
+
+        # Interpolate Y position
+        current_y = int(self.start_y + (self.target_y - self.start_y) * self.progress)
+        cx = config.WINDOW_WIDTH // 2
+
+        # Shadow (appears as polaroid rises)
+        if self.progress > 0.2:
+            shadow_alpha = int(40 * min(1.0, (self.progress - 0.2) / 0.5))
+            shadow = pygame.Surface((self.display_w + 10, self.display_h + 10), pygame.SRCALPHA)
+            shadow.fill((0, 0, 0, shadow_alpha))
+            surface.blit(shadow, (cx - self.display_w // 2 - 5, current_y + 5))
+
+        # Polaroid
+        surface.blit(self.display_surf, (cx - self.display_w // 2, current_y))
+
+    @property
+    def is_complete(self):
+        """Check if the animation is finished."""
+        return self.active and self.progress >= 1.0
+
+    def stop(self):
+        """Stop the animation."""
+        self.active = False
+
+
+class PuzzleBorderFade:
+    """Animation for fading puzzle piece borders when puzzle is solved."""
+
+    def __init__(self):
+        self.active = False
+        self.alpha = 255
+        self._duration = 1.0
+        self._elapsed = 0.0
+
+    def start(self):
+        """Start the border fade animation."""
+        self.active = True
+        self.alpha = 255
+        self._elapsed = 0.0
+
+    def update(self, dt):
+        """Update fade progress."""
+        if not self.active:
+            return
+        self._elapsed += dt
+        t = min(1.0, self._elapsed / self._duration)
+        self.alpha = int(255 * (1.0 - Easing.ease_out_cubic(t)))
+        if t >= 1.0:
+            self.active = False
+            self.alpha = 0
+
+    @property
+    def is_complete(self):
+        return self.active and self.alpha <= 0
+
+    def get_border_alpha(self):
+        """Get current border alpha value."""
+        return max(0, self.alpha)

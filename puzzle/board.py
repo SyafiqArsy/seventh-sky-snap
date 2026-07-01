@@ -26,9 +26,9 @@ class PuzzleBoard:
         self._prev_grabbing = False  # Previous frame grab state
         self._hand_active = False    # Whether hand is currently tracked
 
-    def setup(self, polaroid_surface):
-        """Initialize puzzle from a polaroid surface."""
-        self.pieces = generate_pieces(polaroid_surface)
+    def setup(self, image_surface):
+        """Initialize puzzle from an image surface (raw photo, not polaroid)."""
+        self.pieces = generate_pieces(image_surface)
         self.pieces = shuffle_pieces(self.pieces)
         self.solved = False
         self.dragging_piece = None
@@ -150,43 +150,13 @@ class PuzzleBoard:
             pygame.draw.rect(surface, config.COLOR_PUZZLE_BG, board_rect, border_radius=8)
             pygame.draw.rect(surface, config.COLOR_PIECE_BORDER, board_rect, 2, border_radius=8)
 
-            tray_rect = pygame.Rect(
-                config.PUZZLE_TRAY_X, config.PUZZLE_TRAY_Y,
-                config.PUZZLE_TRAY_WIDTH, config.PUZZLE_TRAY_HEIGHT,
-            )
-            pygame.draw.rect(surface, (25, 25, 40), tray_rect, border_radius=8)
-            pygame.draw.rect(surface, config.COLOR_PIECE_BORDER, tray_rect, 2, border_radius=8)
-
             font = pygame.font.SysFont("arial", 16)
-            label = font.render("Pinch to grab, move to place", True, config.COLOR_TEXT_DIM)
-            surface.blit(label, (tray_rect.centerx - label.get_width() // 2, tray_rect.bottom - 30))
-        else:
-            # Minimal white border for tray area (no fill)
-            tray_rect = pygame.Rect(
-                config.PUZZLE_TRAY_X, config.PUZZLE_TRAY_Y,
-                config.PUZZLE_TRAY_WIDTH, config.PUZZLE_TRAY_HEIGHT,
-            )
-            tray_surf = pygame.Surface((tray_rect.w, tray_rect.h), pygame.SRCALPHA)
-            pygame.draw.rect(tray_surf, (255, 255, 255, 40), tray_surf.get_rect(), 1, border_radius=4)
-            surface.blit(tray_surf, tray_rect.topleft)
-
-            font = pygame.font.SysFont("arial", 14)
-            label = font.render("Pieces", True, (255, 255, 255, 120))
-            label.set_alpha(120)
-            surface.blit(label, (tray_rect.centerx - label.get_width() // 2, tray_rect.bottom - 22))
+            label = font.render("Pinch to grab, move to center", True, config.COLOR_TEXT_DIM)
+            surface.blit(label, (board_rect.centerx - label.get_width() // 2, board_rect.bottom + 10))
 
         # Draw pieces
         for piece in self.pieces:
             piece.draw(surface)
-
-        # Draw hand cursor if active
-        if self.hand_cursor and self._hand_active:
-            cx, cy = self.hand_cursor
-            color = config.COLOR_WARNING if self.hand_grabbing else config.COLOR_ACCENT_LIGHT
-            pygame.draw.circle(surface, color, (cx, cy), 12, 2)
-            pygame.draw.circle(surface, color, (cx, cy), 3)
-            if self.hand_grabbing:
-                pygame.draw.circle(surface, config.COLOR_SUCCESS, (cx, cy), 16, 2)
 
         # Draw hand cursor if active
         if self.hand_cursor and self._hand_active:

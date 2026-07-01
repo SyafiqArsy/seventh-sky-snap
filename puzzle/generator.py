@@ -87,43 +87,79 @@ def generate_pieces(polaroid_surface, rows=None, cols=None,
     return pieces
 
 
-def shuffle_pieces(pieces, tray_x=None, tray_y=None, tray_w=None, tray_h=None):
-    """Shuffle piece positions randomly within the tray area.
+def shuffle_pieces(pieces, board_x=None, board_y=None, board_w=None, board_h=None):
+    """Shuffle piece positions randomly within the puzzle board area.
+
+    All pieces are placed inside the board area in the center of the screen,
+    arranged in a grid but with randomized order so they don't match
+    their correct positions.
 
     Args:
         pieces: list of PuzzlePiece.
-        tray_x: Tray area X. Defaults to config.
-        tray_y: Tray area Y. Defaults to config.
-        tray_w: Tray area width. Defaults to config.
-        tray_h: Tray area height. Defaults to config.
+        board_x: Board area X. Defaults to config.
+        board_y: Board area Y. Defaults to config.
+        board_w: Board area width. Defaults to config.
+        board_h: Board area height. Defaults to config.
 
     Returns:
         list of PuzzlePiece: Same pieces with shuffled positions.
     """
-    if tray_x is None:
-        tray_x = config.PUZZLE_TRAY_X
-    if tray_y is None:
-        tray_y = config.PUZZLE_TRAY_Y
-    if tray_w is None:
-        tray_w = config.PUZZLE_TRAY_WIDTH
-    if tray_h is None:
-        tray_h = config.PUZZLE_TRAY_HEIGHT
+    if board_x is None:
+        board_x = config.PUZZLE_BOARD_X
+    if board_y is None:
+        board_y = config.PUZZLE_BOARD_Y
+    if board_w is None:
+        board_w = config.PUZZLE_BOARD_WIDTH
+    if board_h is None:
+        board_h = config.PUZZLE_BOARD_HEIGHT
 
+    n = len(pieces)
+    if n == 0:
+        return pieces
+
+    # Find the bounding box of all correct positions (the target image area)
+    min_cx = min(p.correct_x for p in pieces)
+    min_cy = min(p.correct_y for p in pieces)
+    max_cx = max(p.correct_x + p.width for p in pieces)
+    max_cy = max(p.correct_y + p.height for p in pieces)
+    img_w = max_cx - min_cx
+    img_h = max_cy - min_cy
+
+    # Calculate grid layout within the board area
+    # We want all pieces to fit inside the board area
+    cols = max(1, int(n ** 0.5))
+    rows = max(1, (n + cols - 1) // cols)
+
+    margin = 6
+    cell_w = (board_w - margin * (cols + 1)) // cols
+    cell_h = (board_h - margin * (rows + 1)) // rows
+
+    # Build a list of grid slot positions (centered in board area)
+    total_grid_w = cols * cell_w + (cols - 1) * margin
+    total_grid_h = rows * cell_h + (rows - 1) * margin
+    start_x = board_x + (board_w - total_grid_w) // 2
+    start_y = board_y + (board_h - total_grid_h) // 2
+
+    slots = []
+    for r in range(rows):
+        for c in range(cols):
+            sx = start_x + c * (cell_w + margin)
+            sy = start_y + r * (cell_h + margin)
+            slots.append((sx, sy))
+
+    # Shuffle the pieces randomly
     random.shuffle(pieces)
 
-    # Arrange pieces in a grid within the tray
-    n = len(pieces)
-    cols = max(1, int(n ** 0.5))
-    rows = (n + cols - 1) // cols
-
-    margin = 10
-    cell_w = (tray_w - margin * (cols + 1)) // cols
-    cell_h = (tray_h - margin * (rows + 1)) // rows
-
+    # Assign each piece to a shuffled slot
     for i, piece in enumerate(pieces):
-        r = i // cols
-        c = i % cols
-        piece.x = tray_x + margin + c * (cell_w + margin)
-        piece.y = tray_y + margin + r * (cell_h + margin)
+        if i < len(slots):
+            px, py = slots[i]
+        else:
+            # Fallback: random position within board
+            px = board_x + random.randint(0, max(0, board_w - piece.width))
+            py = board_y + random.randint(0, max(0, board_h - piece.height))
+
+        piece.x = px
+        piece.y = py
 
     return pieces
