@@ -3,11 +3,11 @@ Seventh Sky Snap - Main Application
 State machine that orchestrates hand-tracking photo capture and puzzle game.
 
 Flow:
-  idle (camera on, show instructions)
+  idle (camera on, show instructions, ambient particles)
   -> frame_creation (both hands pinching, frame corners follow hands)
   -> capture_countdown (both open palms, frame locked, countdown)
   -> image_processing -> puzzle_mode -> solved
-  -> polaroid_presentation -> interactive_polaroid -> save_completed -> idle
+  -> interactive_polaroid (3D rotate review) -> save_completed -> idle
 """
 
 import os
@@ -28,9 +28,10 @@ from image_processing.filters import apply_auto_enhance
 from puzzle.board import PuzzleBoard
 from ui.animation import (
     ParticleSystem, Transition, CountdownAnimation, GestureIndicator,
-    ShutterFlash, PolaroidReveal, PuzzleBorderFade,
+    ShutterFlash, PolaroidReveal, PuzzleBorderFade, PolaroidShatter,
+    SaveToast, VignetteOverlay, AmbientParticles, GlowRing,
 )
-from ui.menu import CameraView, PuzzleView, ResultScreen, StatusBar, InfoPanel
+from ui.menu import CameraView, PuzzleView, StatusBar, InfoPanel
 from ui.polaroid_interaction import PolaroidInteraction
 
 
@@ -61,7 +62,6 @@ class App:
         # ── UI Components ──
         self.camera_view = CameraView()
         self.puzzle_view = PuzzleView()
-        self.result_screen = ResultScreen()
         self.particles = ParticleSystem()
         self.transition = Transition()
         self.countdown_anim = CountdownAnimation()
@@ -73,6 +73,11 @@ class App:
         self.polaroid_reveal = PolaroidReveal()
         self.puzzle_border_fade = PuzzleBorderFade()
         self.polaroid_interaction = PolaroidInteraction()
+        self.polaroid_shatter = PolaroidShatter()
+        self.save_toast = SaveToast()
+        self.vignette = VignetteOverlay()
+        self.ambient_particles = AmbientParticles()
+        self._glow_rings = []
 
         # ── Sound ──
         self.sounds = {}
@@ -85,7 +90,6 @@ class App:
         self.current_gesture = config.GESTURE_NONE
 
         # ── Frame corners (smoothed pixel coords) ──
-        # Left hand controls top-left, right hand controls bottom-right
         self._frame_x1 = 0.0
         self._frame_y1 = 0.0
         self._frame_x2 = 0.0
@@ -107,6 +111,9 @@ class App:
         self._right_hand_landmarks = None
         self._both_pinching = False
         self._both_open = False
+
+        # ── Puzzle snap tracking ──
+        self._prev_solved_count = 0
 
         # ── FPS tracking ──
         self._fps = 0
@@ -175,7 +182,6 @@ class App:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     if self.state in (config.STATE_PUZZLE_MODE, config.STATE_SOLVED,
-                                      config.STATE_POLAROID_PRESENTATION,
                                       config.STATE_INTERACTIVE_POLAROID):
                         self._return_to_idle()
                     else:
@@ -185,19 +191,18 @@ class App:
             elif self.state == config.STATE_PUZZLE_MODE:
                 self.puzzle_board.handle_event(event)
 
-            elif self.state in (config.STATE_SOLVED, config.STATE_POLAROID_PRESENTATION):
-                result = self.result_screen.handle_event(event)
-                if result == "new_session":
-                    self._return_to_idle()
-                elif result == "menu":
-                    self._return_to_idle()
-
     def update(self, dt):
         self.state_time += dt
         self.transition.update(dt)
         self.particles.update(dt)
         self.shutter_flash.update(dt)
         self.camera_view.update_frame_animation(dt)
+        self.ambient_particles.update(dt)
+
+        # Update glow rings
+        for ring in self._glow_rings:
+            ring.update(dt)
+        self._glow_rings = [r for r in self._glow_rings if r.active]
 
         if self.state == config.STATE_IDLE:
             self._update_idle(dt)
@@ -217,14 +222,12 @@ class App:
         elif self.state == config.STATE_SOLVED:
             self._update_solved(dt)
 
-        elif self.state == config.STATE_POLAROID_PRESENTATION:
-            self._update_polaroid_presentation(dt)
-
         elif self.state == config.STATE_INTERACTIVE_POLAROID:
             self._update_interactive_polaroid(dt)
 
         elif self.state == config.STATE_SAVE_COMPLETED:
-            if self.state_time > 2.0:
+            self.save_toast.update(dt)
+            if self.state_time > config.SAVE_TOAST_DURATION:
                 self._return_to_idle()
 
     def draw(self):
@@ -241,8 +244,8 @@ class App:
         elif self.state == config.STATE_PUZZLE_MODE:
             self._draw_puzzle()
 
-        elif self.state in (config.STATE_SOLVED, config.STATE_POLAROID_PRESENTATION):
-            self._draw_result()
+        elif self.state == config.STATE_SOLVED:
+            self._draw_solved()
 
         elif self.state == config.STATE_SAVE_COMPLETED:
             self._draw_save_completed()
@@ -254,6 +257,8 @@ class App:
         self.shutter_flash.draw(self.screen)
         self.gesture_indicator.draw(self.screen)
         self.particles.draw(self.screen)
+        for ring in self._glow_rings:
+            ring.draw(self.screen)
         self.transition.draw(self.screen)
 
     # ── Camera Startup ────────────────────────────────────────
@@ -267,7 +272,6 @@ class App:
         self.change_state(config.STATE_IDLE)
 
     # ── State: IDLE ───────────────────────────────────────────
-    # Camera on, show instructions, wait for two hands.
 
     def _update_idle(self, dt):
         self._read_camera()
@@ -289,7 +293,6 @@ class App:
             self.change_state(config.STATE_FRAME_CREATION)
 
     # ── State: FRAME CREATION ─────────────────────────────────
-    # Both hands detected. If both pinch → frame corners follow hands.
 
     def _update_frame_creation(self, dt):
         self._read_camera()
@@ -318,7 +321,6 @@ class App:
         if left_hand is None or right_hand is None:
             return
 
-        # Check gestures for each hand
         left_gesture = self._classify_hand_gesture(left_hand['landmarks'])
         right_gesture = self._classify_hand_gesture(right_hand['landmarks'])
 
@@ -327,31 +329,26 @@ class App:
         self._both_open = (left_gesture == config.GESTURE_OPEN_HAND
                            and right_gesture == config.GESTURE_OPEN_HAND)
 
-        # Get index finger tip positions for each hand (frame corners)
-        left_index = left_hand['landmarks'][8]   # INDEX_TIP
+        left_index = left_hand['landmarks'][8]
         right_index = right_hand['landmarks'][8]
 
-        # Convert to pixel coords
         li_x = int(left_index[0] * config.WINDOW_WIDTH)
         li_y = int(left_index[1] * config.WINDOW_HEIGHT)
         ri_x = int(right_index[0] * config.WINDOW_WIDTH)
         ri_y = int(right_index[1] * config.WINDOW_HEIGHT)
 
         if self._both_pinching:
-            # Frame corners follow index fingers with smoothing
             self._target_x1 = li_x
             self._target_y1 = li_y
             self._target_x2 = ri_x
             self._target_y2 = ri_y
 
-            # Smooth interpolation
             s = config.FRAME_SMOOTH_FACTOR
             self._frame_x1 += (self._target_x1 - self._frame_x1) * s
             self._frame_y1 += (self._target_y1 - self._frame_y1) * s
             self._frame_x2 += (self._target_x2 - self._frame_x2) * s
             self._frame_y2 += (self._target_y2 - self._frame_y2) * s
 
-            # Ensure minimum frame size
             if abs(self._frame_x2 - self._frame_x1) > config.FRAME_MIN_SIZE and \
                abs(self._frame_y2 - self._frame_y1) > config.FRAME_MIN_SIZE:
                 self.camera_view.set_frame_corners(
@@ -360,9 +357,7 @@ class App:
                 )
 
         elif self._both_open:
-            # Both open palms → lock frame and start countdown
             if self.camera_view.frame_visible:
-                # Lock the current frame position
                 self.camera_view.set_frame_corners(
                     int(self._frame_x1), int(self._frame_y1),
                     int(self._frame_x2), int(self._frame_y2)
@@ -370,10 +365,6 @@ class App:
                 self._start_countdown()
 
     def _classify_hand_gesture(self, landmarks):
-        """Quick gesture classification for a single hand.
-
-        Returns GESTURE_PINCH or GESTURE_OPEN_HAND or GESTURE_NONE.
-        """
         if landmarks is None or len(landmarks) < 21:
             return config.GESTURE_NONE
 
@@ -387,13 +378,11 @@ class App:
         pinky_tip = landmarks[20]
         pinky_pip = landmarks[18]
 
-        # Pinch: thumb and index tips close
         dist = math.sqrt((thumb_tip[0] - index_tip[0]) ** 2 +
                          (thumb_tip[1] - index_tip[1]) ** 2)
         if dist < config.PINCH_GRAB_THRESHOLD:
             return config.GESTURE_PINCH
 
-        # Open hand: all fingers extended
         all_extended = (
             index_tip[1] < index_pip[1] - 0.02
             and middle_tip[1] < middle_pip[1] - 0.02
@@ -406,7 +395,6 @@ class App:
         return config.GESTURE_NONE
 
     # ── State: CAPTURE COUNTDOWN ──────────────────────────────
-    # Frame locked, both open palms held, countdown 3-2-1.
 
     def _start_countdown(self):
         self.change_state(config.STATE_CAPTURE_COUNTDOWN)
@@ -430,7 +418,6 @@ class App:
     # ── Capture & Processing ──────────────────────────────────
 
     def _capture_photo(self):
-        """Capture the region inside the frame from the camera."""
         if self.current_frame_bgr is None:
             self.change_state(config.STATE_IDLE)
             return
@@ -439,11 +426,9 @@ class App:
         self._frozen_frame = self.current_frame_bgr.copy()
         self.shutter_flash.trigger()
 
-        # Crop the frame area from the camera image
         fh, fw = self.current_frame_bgr.shape[:2]
         win_w, win_h = config.WINDOW_WIDTH, config.WINDOW_HEIGHT
 
-        # Scale frame pixel coords back to camera coords
         scale_x = fw / win_w
         scale_h = fh / win_h
 
@@ -453,7 +438,6 @@ class App:
         y2 = min(fh, int(max(self._frame_y1, self._frame_y2) * scale_h))
 
         if x2 - x1 < 10 or y2 - y1 < 10:
-            # Frame too small, capture full frame as fallback
             self.photo_capture.capture_full(self.current_frame_bgr)
         else:
             cropped = self.current_frame_bgr[y1:y2, x1:x2].copy()
@@ -476,28 +460,29 @@ class App:
 
         enhanced = apply_auto_enhance(captured_pil)
 
-        # Create polaroid for final result
         polaroid_pil = create_polaroid(enhanced)
         self.save_path = save_polaroid(polaroid_pil)
 
-        # Convert polaroid to pygame surface
         polaroid_rgb = np.array(polaroid_pil)
         polaroid_rgb = np.rot90(polaroid_rgb)
         polaroid_rgb = np.flipud(polaroid_rgb)
         self.polaroid_surface = pygame.surfarray.make_surface(polaroid_rgb)
 
-        # Convert RAW photo to pygame surface (for puzzle)
         raw_rgb = np.array(enhanced)
         raw_rgb = np.rot90(raw_rgb)
         raw_rgb = np.flipud(raw_rgb)
         self._raw_photo_surface = pygame.surfarray.make_surface(raw_rgb)
 
-        # Set up puzzle using RAW photo
         self.puzzle_board.setup(self._raw_photo_surface)
         self.puzzle_board.on_solved = self._on_puzzle_solved
+        self._prev_solved_count = 0
 
         self.camera_view.hide_frame()
         self.particles.emit_sparkle(config.WINDOW_WIDTH // 2, config.WINDOW_HEIGHT // 2, 20)
+        self._glow_rings.append(GlowRing(
+            config.WINDOW_WIDTH // 2, config.WINDOW_HEIGHT // 2,
+            config.COLOR_ACCENT, 120, 0.8
+        ))
         self.change_state(config.STATE_PUZZLE_MODE)
 
     # ── State: PUZZLE MODE ────────────────────────────────────
@@ -539,34 +524,48 @@ class App:
         self.puzzle_board.update(dt)
         self.puzzle_border_fade.update(dt)
 
-    # ── State: SOLVED → POLAROID → INTERACTIVE ────────────────
+        # Emit snap particles when a new piece is solved
+        current_solved = self.puzzle_board.get_solved_count()
+        if current_solved > self._prev_solved_count:
+            # Find the most recently locked piece
+            for piece in self.puzzle_board.pieces:
+                if piece.is_locked and piece.lock_animation_progress < 0.1:
+                    self.particles.emit_puzzle_snap(
+                        piece.center[0], piece.center[1], 12
+                    )
+                    self._glow_rings.append(GlowRing(
+                        piece.center[0], piece.center[1],
+                        config.COLOR_SUCCESS, 50, 0.4
+                    ))
+            self._prev_solved_count = current_solved
+
+    # ── State: SOLVED → INTERACTIVE ───────────────────────────
 
     def _on_puzzle_solved(self):
         self._play_sound("victory")
         self.particles.emit_confetti(config.WINDOW_WIDTH // 2, 200, 80)
         self.puzzle_border_fade.start()
+        self._glow_rings.append(GlowRing(
+            config.WINDOW_WIDTH // 2, config.WINDOW_HEIGHT // 2,
+            config.COLOR_SUCCESS, 150, 1.0
+        ))
         self.change_state(config.STATE_SOLVED)
 
     def _update_solved(self, dt):
-        self.result_screen.update(dt)
         self.puzzle_border_fade.update(dt)
+        self.polaroid_reveal.update(dt)
 
+        # After 1.5s, start polaroid reveal
         if self.state_time > 1.5:
             if not self.polaroid_reveal.active and self.polaroid_surface:
                 self.polaroid_reveal.start(self.polaroid_surface)
                 self._play_sound("shutter")
                 self.shutter_flash.trigger()
-            self.change_state(config.STATE_POLAROID_PRESENTATION)
 
-    def _update_polaroid_presentation(self, dt):
-        self.polaroid_reveal.update(dt)
-
-        if self.polaroid_reveal.is_complete and self.state_time > 3.0:
-            self._start_interactive_polaroid()
-
-    def _start_interactive_polaroid(self):
-        self.polaroid_interaction.start(self.polaroid_surface)
-        self.change_state(config.STATE_INTERACTIVE_POLAROID)
+            # After reveal completes, go directly to interactive polaroid
+            if self.polaroid_reveal.is_complete:
+                self.polaroid_interaction.start(self.polaroid_surface)
+                self.change_state(config.STATE_INTERACTIVE_POLAROID)
 
     def _update_interactive_polaroid(self, dt):
         self._read_camera()
@@ -581,11 +580,9 @@ class App:
                     config.WINDOW_WIDTH, config.WINDOW_HEIGHT
                 )
 
-                # Use single-hand gesture detection
                 gesture = self.gesture_recognizer.update(self.detector.landmarks)
                 self.current_gesture = gesture
 
-                # Get wrist position for rotation tracking
                 if len(self.detector.landmarks) >= 21:
                     wrist = self.detector.landmarks[0]
                     wrist_x = wrist[0]
@@ -601,11 +598,28 @@ class App:
         )
 
         if save_triggered:
-            saved = self.polaroid_interaction.save_result()
-            if saved:
-                self.save_path = saved
-            self.polaroid_interaction.stop()
-            self.change_state(config.STATE_SAVE_COMPLETED)
+            self._trigger_save()
+
+    def _trigger_save(self):
+        """Finish review — shatter animation and return to idle.
+        Photo was already saved during image processing."""
+        # Start shatter animation
+        self.polaroid_shatter.start(
+            self.polaroid_surface,
+            config.WINDOW_WIDTH // 2,
+            config.WINDOW_HEIGHT // 2
+        )
+        self.polaroid_interaction.stop()
+
+        # Golden sparkle burst
+        self.particles.emit_save_sparkle(
+            config.WINDOW_WIDTH // 2, config.WINDOW_HEIGHT // 2, 40
+        )
+
+        # Start save toast
+        self.save_toast.start(self.save_path or "")
+
+        self.change_state(config.STATE_SAVE_COMPLETED)
 
     # ── Return to Idle ────────────────────────────────────────
 
@@ -631,6 +645,9 @@ class App:
         self.polaroid_interaction.reset()
         self.polaroid_reveal.stop()
         self.puzzle_border_fade.active = False
+        self.polaroid_shatter.active = False
+        self.save_toast.active = False
+        self._prev_solved_count = 0
 
         # Re-open camera and go to idle
         self._start_camera()
@@ -650,6 +667,9 @@ class App:
             self.camera_view.draw_camera_frame(self.screen, self._frozen_frame)
         elif self.current_frame_bgr is not None:
             self.camera_view.draw_camera_frame(self.screen, self.current_frame_bgr)
+
+        # Vignette overlay
+        self.vignette.draw(self.screen)
 
         # Animation tick
         self.camera_view.update_animation(1.0 / config.FPS)
@@ -699,34 +719,58 @@ class App:
                 self.countdown_anim.update(number, (progress * config.COUNTDOWN_SECONDS) % 1.0)
                 self.countdown_anim.draw(self.screen)
 
+        # Ambient particles in idle
+        if self.state == config.STATE_IDLE:
+            self.ambient_particles.draw(self.screen)
+
     def _draw_processing(self):
         if self._frozen_frame is not None:
             self.camera_view.draw_camera_frame(self.screen, self._frozen_frame)
         elif self.current_frame_bgr is not None:
             self.camera_view.draw_camera_frame(self.screen, self.current_frame_bgr)
 
+        # Overlay with gradient
         overlay = pygame.Surface((config.WINDOW_WIDTH, config.WINDOW_HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 150))
+        for row in range(config.WINDOW_HEIGHT):
+            t = row / config.WINDOW_HEIGHT
+            a = int(120 + 50 * t)
+            pygame.draw.line(overlay, (0, 0, 0, min(200, a)),
+                             (0, row), (config.WINDOW_WIDTH, row))
         self.screen.blit(overlay, (0, 0))
 
-        font = pygame.font.SysFont("arial", 32, bold=True)
-        text = font.render("Processing image...", True, config.COLOR_TEXT)
         cx = config.WINDOW_WIDTH // 2
         cy = config.WINDOW_HEIGHT // 2
+
+        # Processing text with fade
+        font = pygame.font.SysFont("arial", 32, bold=True)
+        text = font.render("Processing image...", True, config.COLOR_TEXT)
+        text_alpha = int(200 + 55 * math.sin(self.state_time * 3))
+        text.set_alpha(text_alpha)
         self.screen.blit(text, (cx - text.get_width() // 2, cy - 20))
 
+        # Enhanced spinner with gradient dots
         for i in range(8):
             angle = self.state_time * 3 + i * (math.pi / 4)
             dx = math.cos(angle) * 40
             dy = math.sin(angle) * 40
+            # Size varies per dot
+            dot_size = int(4 + 3 * math.sin(self.state_time * 4 + i * 0.5))
             alpha = int(128 + 127 * math.sin(self.state_time * 5 + i))
-            dot = pygame.Surface((8, 8), pygame.SRCALPHA)
-            pygame.draw.circle(dot, (*config.COLOR_ACCENT[:3], alpha), (4, 4), 4)
-            self.screen.blit(dot, (int(cx + dx - 4), int(cy + 30 + dy - 4)))
+            dot = pygame.Surface((dot_size * 2, dot_size * 2), pygame.SRCALPHA)
+            # Color shifts per dot
+            color_t = (i + self.state_time) % 8 / 8
+            r = int(config.COLOR_ACCENT[0] * (1 - color_t) + config.COLOR_SKY_BLUE[0] * color_t)
+            g = int(config.COLOR_ACCENT[1] * (1 - color_t) + config.COLOR_SKY_BLUE[1] * color_t)
+            b = int(config.COLOR_ACCENT[2] * (1 - color_t) + config.COLOR_SKY_BLUE[2] * color_t)
+            pygame.draw.circle(dot, (r, g, b, alpha), (dot_size, dot_size), dot_size)
+            self.screen.blit(dot, (int(cx + dx - dot_size), int(cy + 30 + dy - dot_size)))
 
     def _draw_puzzle(self):
         if self.current_frame_bgr is not None:
             self.camera_view.draw_camera_frame(self.screen, self.current_frame_bgr)
+
+        # Vignette
+        self.vignette.draw(self.screen)
 
         if self.hand_landmarks_px:
             self.camera_view.draw_hand_landmarks(self.screen, self.hand_landmarks_px, alpha=170)
@@ -788,7 +832,8 @@ class App:
         pygame.draw.rect(grid_surf, grid_color, (0, 0, total_w, total_h), 2)
         self.screen.blit(grid_surf, (min_x, min_y))
 
-    def _draw_result(self):
+    def _draw_solved(self):
+        """Draw the solved state — camera bg + puzzle + polaroid reveal."""
         if self.current_frame_bgr is not None:
             self.camera_view.draw_camera_frame(self.screen, self.current_frame_bgr)
 
@@ -797,12 +842,12 @@ class App:
 
         self.polaroid_reveal.draw(self.screen)
 
-        if not self.polaroid_reveal.active:
-            self.result_screen.draw(self.screen, self.polaroid_surface, self.save_path)
-
     def _draw_interactive_polaroid(self):
         if self.current_frame_bgr is not None:
             self.camera_view.draw_camera_frame(self.screen, self.current_frame_bgr)
+
+        # Vignette
+        self.vignette.draw(self.screen)
 
         if self.hand_landmarks_px:
             self.camera_view.draw_hand_landmarks(self.screen, self.hand_landmarks_px, alpha=150)
@@ -815,23 +860,19 @@ class App:
         self.polaroid_interaction.draw_status(self.screen, self.current_gesture)
 
     def _draw_save_completed(self):
+        """Draw save completed — camera bg + shatter + sparkles + toast."""
         if self.current_frame_bgr is not None:
             self.camera_view.draw_camera_frame(self.screen, self.current_frame_bgr)
 
-        font = pygame.font.SysFont("arial", 36, bold=True)
-        text = font.render("Photo Saved!", True, config.COLOR_SUCCESS)
-        cx = config.WINDOW_WIDTH // 2
-        cy = config.WINDOW_HEIGHT // 2
+        # Vignette
+        self.vignette.draw(self.screen)
 
-        pad = 20
-        bg_rect = pygame.Rect(cx - text.get_width() // 2 - pad,
-                               cy - text.get_height() // 2 - pad,
-                               text.get_width() + pad * 2,
-                               text.get_height() + pad * 2)
-        bg_surf = pygame.Surface((bg_rect.w, bg_rect.h), pygame.SRCALPHA)
-        bg_surf.fill((0, 0, 0, 150))
-        self.screen.blit(bg_surf, bg_rect.topleft)
-        self.screen.blit(text, (cx - text.get_width() // 2, cy - text.get_height() // 2))
+        # Shatter fragments
+        self.polaroid_shatter.update(1.0 / config.FPS)
+        self.polaroid_shatter.draw(self.screen)
+
+        # Save toast
+        self.save_toast.draw(self.screen)
 
         self.status_bar.update(self.state, 1.0 / config.FPS)
         self.status_bar.draw(self.screen)

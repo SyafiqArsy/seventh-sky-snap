@@ -92,7 +92,6 @@ STATE_CAPTURE_COUNTDOWN = "capture_countdown"  # Both open palm, frame locked, c
 STATE_IMAGE_PROCESSING = "image_processing"
 STATE_PUZZLE_MODE = "puzzle_mode"
 STATE_SOLVED = "solved"
-STATE_POLAROID_PRESENTATION = "polaroid_presentation"
 STATE_SAVE_COMPLETED = "save_completed"
 STATE_INTERACTIVE_POLAROID = "interactive_polaroid"
 
@@ -132,7 +131,28 @@ STATUS_MESSAGES = {
     STATE_IMAGE_PROCESSING: "Processing Image...",
     STATE_PUZZLE_MODE: "Solve the Puzzle",
     STATE_SOLVED: "Puzzle Completed!",
-    STATE_POLAROID_PRESENTATION: "Puzzle Completed!",
-    STATE_INTERACTIVE_POLAROID: "Open hand to rotate • Fist to save",
+    STATE_INTERACTIVE_POLAROID: "Open hand to rotate • Fist to finish",
     STATE_SAVE_COMPLETED: "Photo Saved!",
 }
+
+# ── Shatter Animation ────────────────────────────────────────
+SHATTER_PIECES = 16              # Number of fragments
+SHATTER_DURATION = 1.2           # Seconds
+SHATTER_SPEED_MIN = 300          # Min fragment velocity (px/s)
+SHATTER_SPEED_MAX = 800          # Max fragment velocity (px/s)
+SHATTER_GRAVITY = 600            # Fragment gravity (px/s²)
+SHATTER_ROTATION_SPEED = 400     # Max fragment rotation (deg/s)
+
+# ── Save Toast ───────────────────────────────────────────────
+SAVE_TOAST_DURATION = 2.5        # Seconds to show toast
+SAVE_TOAST_SLIDE_SPEED = 600     # Slide-in speed (px/s)
+
+# ── Glow Effects ─────────────────────────────────────────────
+GLOW_RING_DURATION = 0.6         # Glow ring expansion duration
+GLOW_RING_MAX_RADIUS = 80        # Max radius of glow ring
+FINGERTIP_GLOW_RADIUS = 8        # Glow radius at fingertips
+FINGERTIP_GLOW_ALPHA = 60        # Max alpha of fingertip glow
+
+# ── Ambient Particles ────────────────────────────────────────
+AMBIENT_PARTICLE_COUNT = 12      # Floating particles in idle
+AMBIENT_PARTICLE_SPEED = 15      # Drift speed

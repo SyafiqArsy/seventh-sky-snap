@@ -3,7 +3,7 @@ Seventh Sky Snap - Interactive Polaroid Mode (Post-Puzzle)
 Handles single-hand gesture interaction with the polaroid photo:
   - Polaroid stays centered, not movable
   - Open hand + swipe left/right rotates the polaroid around X-axis (3D flip)
-  - Fist gesture saves the polaroid and returns to idle
+  - Fist gesture finishes review with shatter animation and returns to idle
 Simulates 3D X-axis rotation by scaling Y-dimension and showing back face.
 """
 
@@ -24,7 +24,8 @@ class PolaroidInteraction:
     After puzzle completion, the polaroid is displayed centered on screen.
     The user can rotate it around the X-axis by showing an open hand and
     swiping left/right. This creates a 3D card-flip effect where the user
-    can see the back of the polaroid. Showing a fist triggers save.
+    can see the back of the polaroid. Showing a fist finishes the review
+    with a shatter animation and returns to idle.
     """
 
     def __init__(self):
@@ -255,9 +256,9 @@ class PolaroidInteraction:
         # Scale to current dimensions
         scaled = pygame.transform.smoothscale(source, (w, scaled_h))
 
-        # Back face: flip vertically (mirror effect when viewed from behind)
+        # Back face: flip horizontally (mirror effect when viewed from behind)
         if show_back:
-            scaled = pygame.transform.flip(scaled, False, True)
+            scaled = pygame.transform.flip(scaled, True, False)
 
         # Get dimensions for centering
         rw, rh = scaled.get_size()
@@ -294,7 +295,7 @@ class PolaroidInteraction:
             hint = "Saving..."
             color = config.COLOR_SUCCESS
         else:
-            hint = "Show open hand to rotate | Fist to save"
+            hint = "Show open hand to rotate | Fist to finish"
             color = config.COLOR_STATUS_DIM
 
         text_surf = font.render(hint, True, color)
