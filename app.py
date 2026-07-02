@@ -571,9 +571,8 @@ class App:
     def _update_interactive_polaroid(self, dt):
         self._read_camera()
 
-        midpoint = None
-        angle = None
-        distance = None
+        wrist_x = None
+        gesture = config.GESTURE_NONE
 
         if self.current_frame_rgb is not None:
             self.detector.detect(self.current_frame_rgb)
@@ -582,32 +581,26 @@ class App:
                     config.WINDOW_WIDTH, config.WINDOW_HEIGHT
                 )
 
-                if len(self.detector.all_hands) >= 2:
-                    left_hand = self.detector.get_hand_by_label('Right')
-                    right_hand = self.detector.get_hand_by_label('Left')
+                # Use single-hand gesture detection
+                gesture = self.gesture_recognizer.update(self.detector.landmarks)
+                self.current_gesture = gesture
 
-                    if left_hand and right_hand:
-                        self._left_hand_landmarks = left_hand['landmarks']
-                        self._right_hand_landmarks = right_hand['landmarks']
-
-                        self.gesture_recognizer.update_two_hands(
-                            self._left_hand_landmarks, self._right_hand_landmarks
-                        )
-
-                        if self.gesture_recognizer.is_two_hand_active():
-                            midpoint = self.gesture_recognizer.get_midpoint()
-                            angle = self.gesture_recognizer.get_rotation_angle()
-                            distance = self.gesture_recognizer.get_hand_distance()
-                else:
-                    self.gesture_recognizer.update(self.detector.landmarks)
-                    self.gesture_recognizer._two_hand_active = False
+                # Get wrist position for rotation tracking
+                if len(self.detector.landmarks) >= 21:
+                    wrist = self.detector.landmarks[0]
+                    wrist_x = wrist[0]
             else:
                 self.hand_landmarks_px = None
-                self.gesture_recognizer.reset_two_hand()
+                self.gesture_recognizer.update(None)
+                gesture = config.GESTURE_NONE
+                self.current_gesture = config.GESTURE_NONE
 
-        self.polaroid_interaction.update(dt, midpoint, angle, distance)
+        # Update polaroid with single-hand data; fist triggers save
+        save_triggered = self.polaroid_interaction.update_with_hand(
+            dt, wrist_x, gesture
+        )
 
-        if self.polaroid_interaction.is_idle_timeout():
+        if save_triggered:
             saved = self.polaroid_interaction.save_result()
             if saved:
                 self.save_path = saved
@@ -819,7 +812,7 @@ class App:
         self.status_bar.update(self.state, 1.0 / config.FPS)
         self.status_bar.draw(self.screen)
 
-        self.polaroid_interaction.draw_status(self.screen)
+        self.polaroid_interaction.draw_status(self.screen, self.current_gesture)
 
     def _draw_save_completed(self):
         if self.current_frame_bgr is not None:

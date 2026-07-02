@@ -133,6 +133,6 @@ STATUS_MESSAGES = {
     STATE_PUZZLE_MODE: "Solve the Puzzle",
     STATE_SOLVED: "Puzzle Completed!",
     STATE_POLAROID_PRESENTATION: "Puzzle Completed!",
-    STATE_INTERACTIVE_POLAROID: "Free Mode — Move • Tilt • Scale",
+    STATE_INTERACTIVE_POLAROID: "Open hand to rotate • Fist to save",
     STATE_SAVE_COMPLETED: "Photo Saved!",
 }
